@@ -3,6 +3,8 @@ import useSWR from 'swr';
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export default function Home() {
   }, []);
 
   const { data: jobStatus } = useSWR(
-    jobId ? `/api/jobs/${jobId}/status` : null,
+    jobId ? `${API_BASE || ''}/api/jobs/${jobId}/status` : null,
     fetcher,
     { refreshInterval: 2000 }
   );
@@ -29,14 +31,14 @@ export default function Home() {
     if (!url) return alert('Colle une URL YouTube.');
     setBusy(true);
     try {
-      // In production this should call the FastAPI backend. For the PWA demo this calls the next/api mock.
-      const res = await fetch('/api/jobs/analyze', {
+      const endpoint = `${API_BASE || ''}/api/jobs/analyze`;
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
       });
       const json = await res.json();
-      setJobId(json.job_id);
+      setJobId(String(json.job_id));
     } catch (e) {
       console.error(e);
       alert('Erreur lors de la création du job.');
@@ -83,15 +85,15 @@ export default function Home() {
             <div>Status: {jobStatus?.status ?? 'en attente'}</div>
             <div>Étape: {jobStatus?.step ?? '-'}</div>
             <div style={{ marginTop:8 }}>
-              {jobStatus?.clips ? (
+              {jobStatus?.metadata?.clips ? (
                 <div>
                   <h3>Clips générés</h3>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-                    {jobStatus.clips.map((c: any) => (
+                    {jobStatus.metadata.clips.map((c: any) => (
                       <div key={c.id} style={{ background:'#021627', padding:8, borderRadius:6 }}>
                         <div style={{ fontSize:12, opacity:0.8 }}>⭐ {c.score}</div>
-                        <video src={c.preview_url} controls style={{ width:'100%', borderRadius:6 }} />
-                        <a href={c.download_url} style={{ display:'block', marginTop:6, color:'#ffd166' }}>Télécharger</a>
+                        <video src={c.path} controls style={{ width:'100%', borderRadius:6 }} />
+                        <a href={c.path} style={{ display:'block', marginTop:6, color:'#ffd166' }} download>Télécharger</a>
                       </div>
                     ))}
                   </div>

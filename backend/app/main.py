@@ -8,8 +8,24 @@ from app.schemas import CreateJob, JobStatus
 from app.tasks import download_and_transcribe_task
 from sqlalchemy.orm import Session
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Viral Clipper Backend (MVP)")
+
+# CORS (for development; lock down in production)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+STORAGE_PATH = os.getenv("STORAGE_PATH", "/storage")
+# Mount storage to serve generated files (clips, previews)
+if os.path.exists(STORAGE_PATH):
+    app.mount("/storage", StaticFiles(directory=STORAGE_PATH), name="storage")
 
 @app.on_event("startup")
 def on_startup():
@@ -51,3 +67,27 @@ def job_status(job_id: int):
             "storage_path": job.storage_path,
             "metadata": job.get_metadata()
         }
+
+@app.get("/api/jobs/{job_id}/clips")
+def job_clips(job_id: int):
+    """Return list of generated clips for a job (if any)."""
+    with Session(engine) as session:
+        job = session.get(Job, job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        meta = job.get_metadata() or {}
+        clips = meta.get("clips") or []
+        # add full URLs for frontend
+        base = os.getenv("PUBLIC_BASE_URL", None)
+        if base:
+            for c in clips:
+                if c.get("path") and not c.get("download_url"):
+                    c["download_url"] = base.rstrip('/') + c["path"]
+                    c["preview_url"] = base.rstrip('/') + c["path"]
+        else:
+            # serve from same origin via /storage
+            for c in clips:
+                if c.get("path") and not c.get("download_url"):
+                    c["download_url"] = c["path"]
+                    c["preview_url"] = c["path"]
+        return {"clips": clips}
