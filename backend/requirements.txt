@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+celery[redis]
+redis
+yt-dlp
+faster-whisper
+sqlmodel
+sqlalchemy
+pydantic
+aiofiles
+python-multipart
+requests

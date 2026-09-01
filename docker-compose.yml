@@ -1,0 +1,42 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=sqlite:///./data/db.sqlite
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_PATH=/storage
+    volumes:
+      - ./backend/data:/data
+      - ./storage:/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.tasks.celery_app worker --loglevel=info -Q default
+    environment:
+      - DATABASE_URL=sqlite:///./data/db.sqlite
+      - REDIS_URL=redis://redis:6379/0
+      - STORAGE_PATH=/storage
+    volumes:
+      - ./backend/data:/data
+      - ./storage:/storage
+    depends_on:
+      - redis
+      - backend
+
+volumes:
+  redis-data:
