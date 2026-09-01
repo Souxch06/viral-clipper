@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 
 const fetcher = (url: string) => fetch(url).then(res => res.json());
@@ -7,6 +7,17 @@ export default function Home() {
   const [url, setUrl] = useState('');
   const [jobId, setJobId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    // Autofill from share-target redirect or ?shared= param
+    try {
+      const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      const shared = params.get('shared') || params.get('url') || params.get('q');
+      if (shared) setUrl(shared);
+    } catch (e) {
+      // noop
+    }
+  }, []);
 
   const { data: jobStatus } = useSWR(
     jobId ? `/api/jobs/${jobId}/status` : null,
@@ -18,6 +29,7 @@ export default function Home() {
     if (!url) return alert('Colle une URL YouTube.');
     setBusy(true);
     try {
+      // In production this should call the FastAPI backend. For the PWA demo this calls the next/api mock.
       const res = await fetch('/api/jobs/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
