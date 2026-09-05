@@ -148,11 +148,11 @@ def download_and_transcribe_task(self, job_id: int):
                     # useful when Android cannot export a cookies.txt file.
                     header = cookie_header.removeprefix("Cookie:").strip()
                     lines = ["# Netscape HTTP Cookie File"]
-                    for item in re.split(r"[;\\r\\n]+", header):
+                    for item in re.split(r"[;\r\n]+", header):
                         if "=" in item:
                             name, value = item.strip().split("=", 1)
-                            lines.append(f".youtube.com\\tTRUE\\t/\\tTRUE\\t0\\t{name}\\t{value}")
-                    cookie_bytes = ("\\n".join(lines) + "\\n").encode("utf-8")
+                            lines.append(f".youtube.com\tTRUE\t/\tTRUE\t0\t{name}\t{value}")
+                    cookie_bytes = ("\n".join(lines) + "\n").encode("utf-8")
                 # Browser extensions often export JSON instead of Netscape.
                 # Convert it locally so either export format is accepted.
                 try:
@@ -171,8 +171,8 @@ def download_and_transcribe_task(self, job_id: int):
                             path = item.get("path", "/") or "/"
                             secure = "TRUE" if item.get("secure", True) else "FALSE"
                             expiry = int(item.get("expirationDate", item.get("expires", 0)) or 0)
-                            netscape.append(f"{domain}\\t{subdomains}\\t{path}\\t{secure}\\t{expiry}\\t{name}\\t{value}")
-                        cookie_bytes = ("\\n".join(netscape) + "\\n").encode("utf-8")
+                            netscape.append(f"{domain}\t{subdomains}\t{path}\t{secure}\t{expiry}\t{name}\t{value}")
+                        cookie_bytes = ("\n".join(netscape) + "\n").encode("utf-8")
                 except (UnicodeDecodeError, json.JSONDecodeError, TypeError, AttributeError, ValueError):
                     pass
                 with open(cookies_path, "wb") as cookies_file:
