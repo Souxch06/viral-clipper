@@ -133,6 +133,7 @@ def download_and_transcribe_task(self, job_id: int):
                 "format": "best[height<=480][ext=mp4]/best[height<=480]/best[height<=720]/best",
                 "outtmpl": video_out,
                 "noplaylist": True,
+                "socket_timeout": 30,
                 "quiet": True,
                 "no_warnings": True,
                 "extractor_args": {
@@ -223,6 +224,15 @@ def download_and_transcribe_task(self, job_id: int):
                     break
                 except Exception as download_error:
                     last_download_error = download_error
+                    error_text = str(download_error).lower()
+                    # Retrying the same cloud IP after YouTube has issued a bot
+                    # challenge only wastes many minutes. Stop immediately and
+                    # report the actionable fix; retries remain useful for other
+                    # transient extractor errors.
+                    if ("sign in to confirm" in error_text or "not a bot" in error_text) and not (cookies_b64 or cookies_text or cookie_header):
+                        raise RuntimeError(
+                            "YouTube a bloqué Render immédiatement. Ajoutez des cookies YouTube valides dans Render ou importez un fichier vidéo."
+                        ) from download_error
                     # Remove a partial file before trying the next client.
                     for partial in os.listdir(project_dir):
                         if partial.startswith("source"):
