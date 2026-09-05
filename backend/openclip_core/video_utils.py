@@ -1,0 +1,738 @@
+#!/usr/bin/env python3
+"""
+Video Processing Utilities
+Common utility functions for video file handling, metadata extraction, and file management
+"""
+
+import os
+import re
+import json
+import asyncio
+import shutil
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+import logging
+
+from core.file_string_utils import FileStringUtils
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# RESULT CLASSES
+# ============================================================================
+
+class ProcessingResult:
+    """Result container for video processing"""
+    def __init__(self):
+        self.success = False
+        self.video_path = ""
+        self.transcript_path = ""
+        self.video_parts = []  # List of video part paths if split
+        self.transcript_parts = []  # List of transcript part paths if split
+        self.video_info = {}
+        self.processing_time = 0
+        self.transcript_source = ""  # "bilibili" or "whisper"
+        self.was_split = False
+        self.error_message = ""
+        self.engaging_moments_analysis = {}  # Results from engaging moments analysis
+        self.clip_generation = {}  # Results from clip generation
+        self.post_processing = {}  # Results from post-processing (titles and/or subtitles)
+        self.cover_generation = {}  # Results from cover image generation
+        self.source_video_path = ""
+        self.part_offsets = {}
+        self.editor_project_id = ""
+        self.editor_manifest_path = ""
+        self.editor_project = {}  # Editor manifest/project metadata
+
+
+class ResultsFormatter:
+    """Formats and displays processing results"""
+    
+    @staticmethod
+    def print_results(result: ProcessingResult):
+        """Print processing results in a nice format"""
+        print("\n" + "="*60)
+        print("🎬 VIDEO PROCESSING RESULTS")
+        print("="*60)
+        
+        if result.success:
+            print("✅ Status: SUCCESS")
+        else:
+            print("❌ Status: FAILED")
+            print(f"   Error: {result.error_message}")
+            return
+        
+        print(f"⏱️  Processing time: {result.processing_time:.1f} seconds")
+        print(f"📝 Transcript source: {result.transcript_source}")
+        print(f"🔧 Was split: {'Yes' if result.was_split else 'No'}")
+        
+        if result.video_info:
+            video_info = result.video_info
+            print(f"📺 Title: {video_info.get('title', 'Unknown')}")
+            print(f"👤 Uploader: {video_info.get('uploader', 'Unknown')}")
+            if 'duration' in video_info:
+                duration_min = video_info['duration'] / 60
+                print(f"⏱️  Duration: {duration_min:.1f} minutes")
+        
+        print("\n📁 OUTPUT FILES:")
+        
+        if not result.was_split:
+            print(f"   Video: {result.video_path}")
+            if result.transcript_path:
+                print(f"   Transcript: {result.transcript_path}")
+        else:
+            print(f"   Video parts ({len(result.video_parts)}):")
+            for i, part in enumerate(result.video_parts, 1):
+                print(f"     Part {i}: {Path(part).name}")
+            
+            print(f"   Transcript parts ({len(result.transcript_parts)}):")
+            for i, part in enumerate(result.transcript_parts, 1):
+                print(f"     Part {i}: {Path(part).name}")
+        
+        # Display engaging moments analysis results
+        if result.engaging_moments_analysis:
+            analysis = result.engaging_moments_analysis
+            if 'error' not in analysis:
+                print(f"\n🧠 ENGAGING MOMENTS ANALYSIS:")
+                print(f"   Parts analyzed: {analysis.get('total_parts_analyzed', 0)}")
+                if analysis.get('highlights_files'):
+                    print(f"   Highlights files: {len(analysis['highlights_files'])}")
+                if analysis.get('aggregated_file'):
+                    print(f"   Top moments file: {Path(analysis['aggregated_file']).name}")
+                if analysis.get('top_moments') and analysis['top_moments'].get('top_engaging_moments'):
+                    top_moments = analysis['top_moments']['top_engaging_moments']
+                    print(f"   Top engaging moments found: {len(top_moments)}")
+                    for moment in top_moments:  # Show all
+                        print(f"     • {moment.get('title', 'No title')} ({moment.get('duration_seconds', 0)}s)")
+            else:
+                print(f"\n🧠 ENGAGING MOMENTS ANALYSIS: Failed - {analysis['error']}")
+        
+        # Display clip generation results
+        if result.clip_generation:
+            clip_gen = result.clip_generation
+            if clip_gen.get('success'):
+                print(f"\n🎬 CLIP GENERATION:")
+                print(f"   Clips generated: {clip_gen.get('successful_clips', 0)}/{clip_gen.get('total_clips', 0)}")
+                print(f"   Output directory: {clip_gen.get('output_dir', 'N/A')}")
+                if clip_gen.get('clips_info'):
+                    print(f"   Generated clips:")
+                    for clip in clip_gen['clips_info']:
+                        print(f"     • {clip.get('filename', 'N/A')}")
+            else:
+                error = clip_gen.get('error', 'Unknown error')
+                print(f"\n🎬 CLIP GENERATION: Failed - {error}")
+        
+        # Display post-processing results (titles and/or subtitles)
+        if result.post_processing:
+            pp = result.post_processing
+            if pp.get('success'):
+                print(f"\n✨ POST-PROCESSING:")
+                print(f"   Clips processed: {pp.get('successful_clips', 0)}/{pp.get('total_clips', 0)}")
+                print(f"   Output directory: {pp.get('output_dir', 'N/A')}")
+                if pp.get('title_style'):
+                    print(f"   Title style: {pp.get('title_style', 'N/A')}")
+            else:
+                error = pp.get('error', 'Unknown error')
+                print(f"\n✨ POST-PROCESSING: Failed - {error}")
+        
+        # Display cover generation results
+        if result.cover_generation:
+            cover_gen = result.cover_generation
+            if cover_gen.get('success'):
+                print(f"\n🖼️  COVER GENERATION:")
+                print(f"   Covers generated: {cover_gen.get('total_covers', 0)}")
+                print(f"   Output directory: {cover_gen.get('output_dir', 'N/A')}")
+                if cover_gen.get('covers'):
+                    print(f"   Generated covers:")
+                    for cover in cover_gen['covers']:
+                        print(f"     • [{cover.get('rank')}] {cover.get('filename', 'N/A')}")
+            else:
+                error = cover_gen.get('error', 'Unknown error')
+                print(f"\n🖼️  COVER GENERATION: Failed - {error}")
+
+        if getattr(result, 'editor_project_id', ''):
+            print(f"\n🧭 EDITOR PROJECT: {result.editor_project_id}")
+            print(f"   Manifest: {getattr(result, 'editor_manifest_path', 'N/A')}")
+        
+        print("\n" + "="*60)
+
+
+# ============================================================================
+# VALIDATOR CLASSES
+# ============================================================================
+
+
+class VideoFileValidator:
+    """Validates and processes video files"""
+    
+    # Supported video file extensions
+    VIDEO_EXTENSIONS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp'}
+    
+    # Supported subtitle extensions
+    SUBTITLE_EXTENSIONS = ['.srt', '.vtt', '.ass']
+
+    # Invisible Unicode format/control characters commonly introduced when
+    # copying Windows paths from rich text apps or terminals.
+    _INVISIBLE_PATH_CHARS = {
+        '\u200b',  # zero width space
+        '\u200e',  # left-to-right mark
+        '\u200f',  # right-to-left mark
+        '\u202a',  # left-to-right embedding
+        '\u202b',  # right-to-left embedding
+        '\u202c',  # pop directional formatting
+        '\u202d',  # left-to-right override
+        '\u202e',  # right-to-left override
+        '\u2066',  # left-to-right isolate
+        '\u2067',  # right-to-left isolate
+        '\u2068',  # first strong isolate
+        '\u2069',  # pop directional isolate
+        '\ufeff',  # zero width no-break space / BOM
+    }
+
+    @classmethod
+    def sanitize_path_input(cls, source: str) -> str:
+        """Remove invisible formatting chars and trim outer whitespace/quotes."""
+        if not source:
+            return source
+
+        cleaned = ''.join(ch for ch in source if ch not in cls._INVISIBLE_PATH_CHARS).strip()
+
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {"'", '"'}:
+            cleaned = cleaned[1:-1].strip()
+
+        return cleaned
+    
+    @classmethod
+    def resolve_local_path(cls, source: str) -> str:
+        """
+        Return the best-matching local path for source.
+
+        If the path exists as-is, returns it unchanged. If not, scans the
+        parent directory for a file whose name matches after normalizing
+        common Unicode punctuation variants (curly apostrophes, smart quotes,
+        en/em dashes, etc.) to their ASCII equivalents. This handles filenames
+        copied from web pages or macOS apps that substitute typographic
+        characters for standard ASCII ones.
+
+        Returns the resolved path string if a match is found, otherwise the
+        original source string (which will fail existence checks as before).
+        """
+        source = cls.sanitize_path_input(source)
+        path = Path(source)
+        if path.exists():
+            return source
+
+        parent = path.parent
+        if not parent.exists():
+            return source
+
+        target = cls._ascii_normalize(path.name)
+        for candidate in parent.iterdir():
+            if cls._ascii_normalize(candidate.name) == target:
+                logger.info(
+                    f"Resolved Unicode filename variant: {path.name!r} → {candidate.name!r}"
+                )
+                return str(candidate)
+
+        return source
+
+    # Map of common Unicode punctuation to their ASCII equivalents
+    _UNICODE_PUNCT_MAP = str.maketrans({
+        '\u2018': "'", '\u2019': "'",   # left/right single quotation marks
+        '\u201a': "'", '\u201b': "'",   # single low-9 / high-reversed-9
+        '\u201c': '"', '\u201d': '"',   # left/right double quotation marks
+        '\u201e': '"', '\u201f': '"',   # double low-9 / high-reversed-9
+        '\u2013': '-', '\u2014': '-',   # en dash, em dash
+        '\u2026': '...',                # horizontal ellipsis
+        '\u00b7': '.',                  # middle dot
+    })
+
+    @classmethod
+    def _ascii_normalize(cls, name: str) -> str:
+        """Normalize Unicode punctuation variants to ASCII for fuzzy matching."""
+        return name.translate(cls._UNICODE_PUNCT_MAP)
+
+    @classmethod
+    def is_local_video_file(cls, source: str) -> bool:
+        """Check if source is a local video file or URL"""
+        source = cls.sanitize_path_input(source)
+
+        # Check if it's a URL
+        if source.startswith(('http://', 'https://', 'ftp://')):
+            return False
+
+        # Check if it's a valid file path
+        path = Path(source)
+        if not path.exists():
+            return False
+
+        # Check if it's a video file by extension
+        return path.suffix.lower() in cls.VIDEO_EXTENSIONS
+    
+    @classmethod
+    def is_video_file(cls, file_path: str) -> bool:
+        """Check if file is a video file by extension"""
+        return Path(file_path).suffix.lower() in cls.VIDEO_EXTENSIONS
+
+
+class VideoMetadataExtractor:
+    """Extracts video metadata using ffprobe"""
+    
+    @staticmethod
+    async def get_video_info_ffprobe(video_path: str) -> Dict[str, Any]:
+        """Get video information using ffprobe"""
+        try:
+            # Use ffprobe to get video information
+            cmd = [
+                'ffprobe', '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_format', '-show_streams',
+                video_path
+            ]
+            
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode != 0:
+                raise Exception(f"ffprobe failed: {stderr.decode('utf-8', errors='ignore')}")
+            
+            probe_data = json.loads(stdout.decode('utf-8', errors='ignore'))
+            
+            # Extract relevant information
+            format_info = probe_data.get('format', {})
+            video_stream = None
+            
+            # Find the first video stream
+            for stream in probe_data.get('streams', []):
+                if stream.get('codec_type') == 'video':
+                    video_stream = stream
+                    break
+            
+            duration = float(format_info.get('duration', 0))
+            title = Path(video_path).stem
+            
+            video_info = {
+                'title': title,
+                'duration': duration,
+                'uploader': 'Local File',
+                'description': f'Local video file: {Path(video_path).name}',
+                'view_count': 0,
+                'upload_date': datetime.now().strftime('%Y%m%d'),
+                'webpage_url': f'file://{video_path}',
+                'width': video_stream.get('width', 0) if video_stream else 0,
+                'height': video_stream.get('height', 0) if video_stream else 0,
+                'fps': eval(video_stream.get('r_frame_rate', '0/1')) if video_stream else 0
+            }
+            
+            logger.info(f"📊 Video info: {title}, {duration:.1f}s, {video_info.get('width')}x{video_info.get('height')}")
+            
+            return video_info
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to get video info with ffprobe: {e}")
+            # Fallback to basic info
+            return VideoMetadataExtractor._get_fallback_video_info(video_path)
+    
+    @staticmethod
+    def _get_fallback_video_info(video_path: str) -> Dict[str, Any]:
+        """Fallback video info when ffprobe fails"""
+        return {
+            'title': Path(video_path).stem,
+            'duration': 0,  # Will be treated as unknown
+            'uploader': 'Local File',
+            'description': f'Local video file: {Path(video_path).name}',
+            'view_count': 0,
+            'upload_date': datetime.now().strftime('%Y%m%d'),
+            'webpage_url': f'file://{video_path}'
+        }
+
+
+class VideoFileManager:
+    """Manages video file operations like copying, organizing, and finding files"""
+    
+    @staticmethod
+    def copy_video_to_output(video_path: str, output_dir: Path, video_name: Optional[str] = None) -> Path:
+        """Copy video file to output directory"""
+        video_file = Path(video_path)
+        if not video_file.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        
+        # Use video name or filename stem if not provided
+        if not video_name:
+            video_name = video_file.stem
+        
+        # Sanitize video name for directory
+        safe_video_name = FileStringUtils.sanitize_filename(video_name)
+        
+        # Create video-specific directory structure
+        video_root_dir = output_dir / safe_video_name
+        video_root_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create local videos directory under video-specific root
+        local_videos_dir = video_root_dir / "local_videos"
+        local_videos_dir.mkdir(parents=True, exist_ok=True)
+        
+        processed_video_path = local_videos_dir / video_file.name
+        
+        if not processed_video_path.exists():
+            # Copy the video to our output directory
+            shutil.copy2(video_path, processed_video_path)
+            logger.info(f"📋 Copied video to: {processed_video_path}")
+        else:
+            logger.info(f"📁 Using existing copy: {processed_video_path}")
+        
+        return processed_video_path
+    
+    @staticmethod
+    def find_existing_subtitle(video_path: str, output_dir: Path, video_name: Optional[str] = None) -> str:
+        """Find existing subtitle file for a video"""
+        video_file = Path(video_path)
+        subtitle_path = ''
+        
+        for ext in VideoFileValidator.SUBTITLE_EXTENSIONS:
+            potential_subtitle = video_file.parent / f"{video_file.stem}{ext}"
+            if potential_subtitle.exists():
+                # Use video name or filename stem if not provided
+                if not video_name:
+                    video_name = video_file.stem
+                
+                # Sanitize video name for directory
+                safe_video_name = FileStringUtils.sanitize_filename(video_name)
+                
+                # Copy subtitle to output directory
+                subtitle_dest = output_dir / safe_video_name / "local_videos" / f"{video_file.stem}{ext}"
+                subtitle_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(potential_subtitle, subtitle_dest)
+                subtitle_path = str(subtitle_dest)
+                logger.info(f"📝 Found existing subtitle: {potential_subtitle.name}")
+                break
+        
+        return subtitle_path
+    
+    @staticmethod
+    def find_downloaded_video(output_dir: Path, title: str) -> Optional[Path]:
+        """Find downloaded video file"""
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.flv']
+        
+        for ext in possible_extensions:
+            video_path = output_dir / f"{title}{ext}"
+            if video_path.exists():
+                return video_path
+        
+        # Fuzzy matching
+        for file_path in output_dir.glob(f"{title}*"):
+            if file_path.suffix.lower() in possible_extensions:
+                return file_path
+        
+        return None
+    
+    @staticmethod
+    def find_downloaded_subtitle(output_dir: Path, title: str) -> Optional[Path]:
+        """Find downloaded subtitle file with AI subtitle priority"""
+        logger.info(f"Looking for subtitle file with title: {title}")
+        
+        # Check for AI subtitle first
+        ai_subtitle_path = output_dir / f"{title}.ai-zh.srt"
+        if ai_subtitle_path.exists():
+            # Rename to standard format
+            standard_path = output_dir / f"{title}.srt"
+            if not standard_path.exists():
+                ai_subtitle_path.rename(standard_path)
+                logger.info(f"Renamed AI subtitle: {title}.ai-zh.srt -> {title}.srt")
+                return standard_path
+            return ai_subtitle_path
+        
+        # Check standard format
+        standard_path = output_dir / f"{title}.srt"
+        if standard_path.exists():
+            logger.info(f"Found standard subtitle: {title}.srt")
+            return standard_path
+        
+        # Fuzzy matching for subtitle files
+        for file_path in output_dir.glob(f"{title}*.srt"):
+            logger.info(f"Found subtitle file: {file_path.name}")
+            return file_path
+        
+        logger.warning(f"No subtitle file found for title: {title}")
+        return None
+    
+    @staticmethod
+    def find_video_parts(splits_dir: Path, base_name: str) -> tuple[List[str], List[str]]:
+        """Find all video and transcript parts after splitting"""
+        video_parts = []
+        transcript_parts = []
+
+        for file_path in splits_dir.glob(f"{base_name}_part*.mp4"):
+            video_parts.append(str(file_path))
+
+        for file_path in splits_dir.glob(f"{base_name}_part*.srt"):
+            transcript_parts.append(str(file_path))
+        
+        video_parts.sort()
+        transcript_parts.sort()
+        
+        return video_parts, transcript_parts
+
+
+class ProgressCallbackManager:
+    """Manages progress callback creation and mapping"""
+    
+    @staticmethod
+    def create_download_progress_callback(progress_callback: Optional[callable], 
+                                        start_percent: float = 0, 
+                                        end_percent: float = 25) -> Optional[callable]:
+        """Create progress callback for download phase"""
+        if not progress_callback:
+            return None
+        
+        def download_progress(status: str, progress: float):
+            # Map download progress to specified range of total
+            total_progress = start_percent + (progress * (end_percent - start_percent) / 100)
+            progress_callback(f"Downloading: {status}", total_progress)
+        
+        return download_progress
+    
+    @staticmethod
+    def create_whisper_progress_callback(progress_callback: Optional[callable],
+                                       current_file: int,
+                                       total_files: int,
+                                       start_percent: float = 35,
+                                       end_percent: float = 48) -> float:
+        """Create progress update for Whisper transcription"""
+        if not progress_callback:
+            return 0
+        
+        progress = start_percent + (current_file / total_files) * (end_percent - start_percent)
+        progress_callback(f"Generating transcript for part {current_file + 1}/{total_files}...", progress)
+        return progress
+
+
+class FileNameSanitizer:
+    """Utilities for sanitizing and managing file names"""
+    
+    @staticmethod
+    def sanitize_filename(filename: str) -> str:
+        """Sanitize filename by removing unsafe characters"""
+        unsafe_chars = '<>:"/\\|?*'
+        for char in unsafe_chars:
+            filename = filename.replace(char, '_')
+        
+        # Limit filename length
+        if len(filename) > 100:
+            filename = filename[:100]
+        
+        return filename.strip()
+
+
+class VideoDirectoryProcessor:
+    """Utilities for batch processing video directories"""
+    
+    @staticmethod
+    def find_videos_in_directory(directory: Path, 
+                                recursive: bool = False) -> List[Path]:
+        """Find all video files in a directory"""
+        video_files = []
+        
+        if recursive:
+            pattern = "**/*"
+        else:
+            pattern = "*"
+        
+        for ext in VideoFileValidator.VIDEO_EXTENSIONS:
+            video_files.extend(directory.glob(f"{pattern}{ext}"))
+        
+        return sorted(video_files)
+    
+    @staticmethod
+    def get_video_file_info(video_path: Path) -> Dict[str, Any]:
+        """Get basic info about a video file"""
+        try:
+            stat = video_path.stat()
+            return {
+                'name': video_path.name,
+                'path': str(video_path),
+                'size': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime),
+                'extension': video_path.suffix.lower()
+            }
+        except Exception as e:
+            logger.warning(f"Could not get info for {video_path}: {e}")
+            return {
+                'name': video_path.name,
+                'path': str(video_path),
+                'size': 0,
+                'modified': datetime.now(),
+                'extension': video_path.suffix.lower()
+            }
+
+
+# Convenience functions for common operations
+async def process_local_video_file(video_path: str, output_dir: Path) -> Dict[str, Any]:
+    """Complete local video processing workflow"""
+    # Get video information first to get video name
+    video_info = await VideoMetadataExtractor.get_video_info_ffprobe(video_path)
+    video_name = video_info.get('title', Path(video_path).stem)
+    
+    # Copy video to output directory
+    processed_video_path = VideoFileManager.copy_video_to_output(video_path, output_dir, video_name)
+    
+    # Look for existing subtitle file
+    subtitle_path = VideoFileManager.find_existing_subtitle(video_path, output_dir, video_name)
+    
+    return {
+        'video_path': str(processed_video_path),
+        'video_info': video_info,
+        'subtitle_path': subtitle_path
+    }
+
+
+def validate_video_source(source: str) -> tuple[bool, str]:
+    """Validate and classify video source"""
+    if VideoFileValidator.is_local_video_file(source):
+        return True, "local_file"
+    elif source.startswith(('http://', 'https://')):
+        return True, "url"
+    else:
+        return False, "unknown"
+
+
+async def find_existing_download(url: str, 
+                               output_dir: Path, 
+                               progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+    """
+    Find existing downloaded video for a URL (supports Bilibili and YouTube)
+    
+    Args:
+        url: Video URL (Bilibili or YouTube)
+        output_dir: Base output directory
+        progress_callback: Progress callback function
+        
+    Returns:
+        Dictionary with video path, info, and subtitle path
+    """
+    if progress_callback:
+        progress_callback("Looking for existing download...", 10)
+    
+    try:
+        # Extract video ID from URL to find the dedicated directory
+        import re
+        
+        # Try Bilibili pattern
+        bv_match = re.search(r'BV[a-zA-Z0-9]+', url)
+        if bv_match:
+            video_id = bv_match.group()
+        else:
+            # Try YouTube patterns
+            yt_patterns = [
+                r'youtube\.com/watch\?v=([\w-]+)',
+                r'youtu\.be/([\w-]+)',
+                r'youtube\.com/shorts/([\w-]+)',
+                r'youtube\.com/embed/([\w-]+)',
+            ]
+            video_id = None
+            for pattern in yt_patterns:
+                match = re.search(pattern, url)
+                if match:
+                    video_id = match.group(1)
+                    break
+            
+            if not video_id:
+                raise Exception("Could not extract video ID from URL")
+        
+        # VideoOrchestrator creates: output_dir/{safe_title}/downloads/
+        # Files are named by title (yt-dlp default), not by video ID.
+        video_dir = None
+
+        VIDEO_EXTS = {'.mp4', '.mkv', '.webm', '.flv'}
+
+        def _find_in_downloads(downloads_dir: Path) -> Optional[Path]:
+            if not downloads_dir.exists():
+                return None
+            if any(f.suffix.lower() in VIDEO_EXTS for f in downloads_dir.iterdir() if f.is_file()):
+                return downloads_dir
+            return None
+
+        # Search one level deep: output_dir/{safe_title}/downloads/
+        for subdir in output_dir.iterdir():
+            if subdir.is_dir():
+                found = _find_in_downloads(subdir / "downloads")
+                if found:
+                    video_dir = found
+                    break
+
+        # Fallback: output_dir/downloads/ (flat layout)
+        if not video_dir:
+            video_dir = _find_in_downloads(output_dir / "downloads")
+
+        if not video_dir:
+            raise Exception(f"No existing download directory found for {video_id}")
+        
+        logger.info(f"📁 Found existing download directory: {video_dir.name}")
+        
+        # Find video and subtitle files in the directory
+        video_files = list(video_dir.glob("*.mp4")) + list(video_dir.glob("*.mkv")) + list(video_dir.glob("*.webm"))
+        if not video_files:
+            raise Exception(f"No video files found in {video_dir}")
+        
+        video_path = str(video_files[0])  # Take the first video file
+        
+        # Look for subtitle file
+        subtitle_files = list(video_dir.glob("*.srt"))
+        subtitle_path = str(subtitle_files[0]) if subtitle_files else ""
+        
+        # Look for info file to get video metadata
+        info_files = list(video_dir.glob("*.info.json"))
+        video_info = {}
+        if info_files:
+            try:
+                with open(info_files[0], 'r', encoding='utf-8') as f:
+                    video_info = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load video info: {e}")
+                video_info = {'title': video_dir.name, 'duration': 0}
+        else:
+            video_info = {'title': video_dir.name, 'duration': 0}
+        
+        if progress_callback:
+            progress_callback("Found existing download", 25)
+        
+        return {
+            'video_path': video_path,
+            'video_info': video_info,
+            'subtitle_path': subtitle_path
+        }
+        
+    except Exception as e:
+        logger.error(f"Error finding existing download: {e}")
+        return {
+            'video_path': None,
+            'video_info': {},
+            'subtitle_path': ""
+        }
+
+
+def insights_to_clip_format(insights: list) -> dict:
+    """Convert insights list to ClipGenerator's top_engaging_moments format."""
+    moments = []
+    for i, insight in enumerate(insights):
+        moments.append({
+            "rank": i + 1,
+            "title": insight["claim"][:80],
+            "timing": {
+                "video_part": insight.get("video_part", "part01"),
+                "start_time": insight["start_time"],
+                "end_time": insight["end_time"],
+                "duration": insight.get("duration_seconds", 0),
+            },
+            "transcript": insight.get("quote", ""),
+            "engagement_details": {"engagement_level": "high"},
+            "why_engaging": insight.get("claim", ""),
+        })
+    return {"top_engaging_moments": moments}
