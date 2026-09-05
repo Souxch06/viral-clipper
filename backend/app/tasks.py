@@ -133,12 +133,39 @@ def download_and_transcribe_task(self, job_id: int):
                 with open(cookies_path, "wb") as cookies_file:
                     cookies_file.write(base64.b64decode(cookies_b64))
                 ydl_opts["cookiefile"] = cookies_path
-            # download
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(job.original_url, download=True)
-                # get downloaded filename
-                downloaded_file = ydl.prepare_filename(info)
-                duration = info.get('duration', None) or 0
+            # YouTube changes the available player clients frequently and cloud
+            # IPs are sometimes challenged. Retry compatible clients before
+            # failing the job; cookies, when configured, are applied to each try.
+            client_profiles = [
+                ["android", "web_safari"],
+                ["tv", "web_safari"],
+                ["mweb", "web_safari"],
+            ]
+            last_download_error = None
+            for clients in client_profiles:
+                try:
+                    attempt_opts = dict(ydl_opts)
+                    attempt_opts["extractor_args"] = {"youtube": {"player_client": clients}}
+                    with yt_dlp.YoutubeDL(attempt_opts) as ydl:
+                        info = ydl.extract_info(job.original_url, download=True)
+                        downloaded_file = ydl.prepare_filename(info)
+                        duration = info.get('duration', None) or 0
+                    break
+                except Exception as download_error:
+                    last_download_error = download_error
+                    # Remove a partial file before trying the next client.
+                    for partial in os.listdir(project_dir):
+                        if partial.startswith("source"):
+                            try:
+                                os.remove(os.path.join(project_dir, partial))
+                            except OSError:
+                                pass
+            else:
+                raise RuntimeError(
+                    "YouTube bloque le téléchargement depuis Render. "
+                    "Ajoutez YOUTUBE_COOKIES_B64 dans Render ou importez directement une vidéo. "
+                    f"Détail: {str(last_download_error)[:240]}"
+                )
 
             update_job(job_id, step="extract_audio", storage_path=project_dir)
 
