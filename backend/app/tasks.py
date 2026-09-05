@@ -133,11 +133,27 @@ def download_and_transcribe_task(self, job_id: int):
             # for videos that still require an authenticated YouTube session.
             # It is deliberately opt-in; public videos should work without it.
             cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
-            if cookies_b64:
+            cookies_text = os.getenv("YOUTUBE_COOKIES_TEXT")
+            cookie_header = os.getenv("YOUTUBE_COOKIE_HEADER")
+            if cookies_b64 or cookies_text or cookie_header:
                 import base64
                 cookies_path = os.path.join(project_dir, "youtube-cookies.txt")
+                if cookies_b64:
+                    cookie_bytes = base64.b64decode(cookies_b64)
+                elif cookies_text:
+                    cookie_bytes = cookies_text.encode("utf-8")
+                else:
+                    # Also accept a copied browser Cookie header. This is
+                    # useful when Android cannot export a cookies.txt file.
+                    header = cookie_header.removeprefix("Cookie:").strip()
+                    lines = ["# Netscape HTTP Cookie File"]
+                    for item in header.split(";"):
+                        if "=" in item:
+                            name, value = item.strip().split("=", 1)
+                            lines.append(f".youtube.com\\tTRUE\\t/\\tTRUE\\t0\\t{name}\\t{value}")
+                    cookie_bytes = ("\\n".join(lines) + "\\n").encode("utf-8")
                 with open(cookies_path, "wb") as cookies_file:
-                    cookies_file.write(base64.b64decode(cookies_b64))
+                    cookies_file.write(cookie_bytes)
                 ydl_opts["cookiefile"] = cookies_path
             # YouTube changes the available player clients frequently and cloud
             # IPs are sometimes challenged. Retry compatible clients before
