@@ -443,9 +443,14 @@ def download_and_transcribe_task(self, job_id: int):
                                 except OSError:
                                     pass
                 else:
+                    cookie_hint = (
+                        "Des cookies ont été fournis mais YouTube les a refusés/ils sont expirés."
+                        if has_cookie_source else
+                        "Aucun cookie valide n’est configuré dans Render."
+                    )
                     raise RuntimeError(
                         "YouTube bloque le téléchargement depuis Render. "
-                        "Ajoutez YOUTUBE_COOKIES_B64 dans Render ou importez directement une vidéo. "
+                        f"{cookie_hint} Utilisez des cookies complets de youtube.com ou importez une vidéo. "
                         f"Détail: {str(last_download_error)[:240]}"
                     )
 
