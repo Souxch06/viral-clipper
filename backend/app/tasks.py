@@ -50,7 +50,7 @@ def generate_segments_from_transcript(transcript_path: str, video_duration: floa
     # fallback: create sliding windows every 15s with length 30s
     candidates = []
     step = 15
-    window = 30
+    window = max(10, int(prefer_clip_durations[0] if prefer_clip_durations else 30))
     t = 0.0
     while t < max(0, video_duration - 1):
         start = t
@@ -118,6 +118,9 @@ def download_and_transcribe_task(self, job_id: int):
             job = session.get(Job, job_id)
             if not job:
                 return
+            options = job.get_metadata() or {}
+            max_clips = max(1, min(10, int(options.get("max_clips", 4))))
+            clip_duration = max(10, min(90, int(options.get("clip_duration", 20))))
 
             project_dir = os.path.join(STORAGE_PATH, f"job_{job_id}")
             os.makedirs(project_dir, exist_ok=True)
@@ -277,11 +280,11 @@ def download_and_transcribe_task(self, job_id: int):
 
             update_job(job_id, step="segmenting", progress=65)
             # generate candidate segments
-            candidates = generate_segments_from_transcript(transcript_path, duration)
+            candidates = generate_segments_from_transcript(transcript_path, duration, [clip_duration])
 
             update_job(job_id, step="scoring", progress=72)
             # for MVP we use the candidate score as-is
-            selected = candidates[:4]
+            selected = candidates[:max_clips]
 
             update_job(job_id, step="rendering", progress=75)
             clips_meta = []
@@ -317,6 +320,7 @@ def download_and_transcribe_task(self, job_id: int):
                 "audio": audio_path,
                 "transcript": transcript_path,
                 "clips": clips_meta,
+                "settings": options,
             }
             with Session(engine) as session2:
                 job2 = session2.get(Job, job_id)

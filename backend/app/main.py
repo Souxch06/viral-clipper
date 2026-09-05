@@ -52,7 +52,8 @@ def create_job(payload: CreateJob, background_tasks: BackgroundTasks):
     # create job
     from sqlmodel import Session
     with Session(engine) as session:
-        job = Job(original_url=url, status="pending", step="queued")
+        job = Job(original_url=url, status="pending", step="queued", progress=2)
+        job.set_metadata(payload.dict())
         session.add(job)
         session.commit()
         session.refresh(job)
