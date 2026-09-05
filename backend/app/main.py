@@ -39,18 +39,6 @@ def studio():
     """Main landing page: the URL YouTube workflow."""
     return studio_file()
 
-@app.get("/url", response_class=FileResponse)
-def url_page():
-    return studio_file()
-
-@app.get("/fichier", response_class=FileResponse)
-def file_page():
-    return studio_file()
-
-@app.get("/reglages", response_class=FileResponse)
-def settings_page():
-    return studio_file()
-
 @app.post("/api/jobs/analyze", response_model=dict)
 def create_job(payload: CreateJob, background_tasks: BackgroundTasks):
     url = payload.url
