@@ -87,7 +87,7 @@ def render_clip(downloaded_file: str, start: float, end: float, out_path: str):
             '-ss', str(start),
             '-to', str(end),
             '-i', downloaded_file,
-            '-vf', "scale=-2:1920,crop=1080:1920:(in_w-1080)/2:0",
+            '-vf', "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2",
             '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast',
             '-c:a', 'aac', '-b:a', '128k',
             out_path
@@ -111,11 +111,28 @@ def download_and_transcribe_task(self, job_id: int):
             os.makedirs(project_dir, exist_ok=True)
             video_out = os.path.join(project_dir, "source.%(ext)s")
             ydl_opts = {
-                "format": "best",
+                # Prefer YouTube's mobile/web clients: the default web client
+                # is frequently challenged as a bot from cloud IP ranges.
+                "format": "best[ext=mp4]/best",
                 "outtmpl": video_out,
                 "quiet": True,
-                "no_warnings": True
+                "no_warnings": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "web_safari"],
+                    }
+                },
             }
+            # An optional base64 encoded cookies.txt can be supplied in Render
+            # for videos that still require an authenticated YouTube session.
+            # It is deliberately opt-in; public videos should work without it.
+            cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
+            if cookies_b64:
+                import base64
+                cookies_path = os.path.join(project_dir, "youtube-cookies.txt")
+                with open(cookies_path, "wb") as cookies_file:
+                    cookies_file.write(base64.b64decode(cookies_b64))
+                ydl_opts["cookiefile"] = cookies_path
             # download
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(job.original_url, download=True)
@@ -154,11 +171,17 @@ def download_and_transcribe_task(self, job_id: int):
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     json.dump({"segments": transcript}, f, ensure_ascii=False, indent=2)
             except Exception as e:
-                # faster-whisper not available or failed
-                transcript_path = os.path.join(project_dir, "transcript_failed.txt")
-                with open(transcript_path, "w") as f:
-                    f.write("Transcription failed: " + str(e))
-                raise
+                # Android/Termux peut ne pas disposer d'une wheel faster-whisper.
+                # On conserve un transcript vide afin de permettre au moteur FFmpeg
+                # de produire des clips par fenêtres temporelles.
+                if os.getenv("TERMUX_MODE", "0") != "1":
+                    transcript_path = os.path.join(project_dir, "transcript_failed.txt")
+                    with open(transcript_path, "w") as f:
+                        f.write("Transcription failed: " + str(e))
+                    raise
+                transcript_path = os.path.join(project_dir, "transcript.json")
+                with open(transcript_path, "w", encoding="utf-8") as f:
+                    json.dump({"segments": []}, f)
 
             update_job(job_id, step="segmenting")
             # generate candidate segments
