@@ -7,13 +7,16 @@ import yt_dlp
 import subprocess
 import json
 import traceback
+import time
 from datetime import datetime
 
 # Celery config
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 celery_app = Celery("tasks", broker=REDIS_URL, backend=REDIS_URL)
 STORAGE_PATH = os.getenv("STORAGE_PATH", "/storage")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
+# tiny is the practical default on Render's free CPU; users can select base
+# or small through the environment when they prefer accuracy over speed.
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 
 # helper to update job
 def update_job(job_id: int, **kwargs):
@@ -88,8 +91,8 @@ def render_clip(downloaded_file: str, start: float, end: float, out_path: str):
             '-to', str(end),
             '-i', downloaded_file,
             '-vf', "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2",
-            '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast',
-            '-c:a', 'aac', '-b:a', '128k',
+            '-c:v', 'libx264', '-crf', '23', '-preset', 'faster', '-threads', '0',
+            '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
             out_path
         ]
         subprocess.run(cmd, check=True)
@@ -113,8 +116,11 @@ def download_and_transcribe_task(self, job_id: int):
             ydl_opts = {
                 # Prefer YouTube's mobile/web clients: the default web client
                 # is frequently challenged as a bot from cloud IP ranges.
-                "format": "best[ext=mp4]/best",
+                # Avoid downloading 1080p+ sources on Render unless no smaller
+                # representation is available; this greatly reduces wait time.
+                "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
                 "outtmpl": video_out,
+                "noplaylist": True,
                 "quiet": True,
                 "no_warnings": True,
                 "extractor_args": {
@@ -146,11 +152,14 @@ def download_and_transcribe_task(self, job_id: int):
                 try:
                     attempt_opts = dict(ydl_opts)
                     attempt_opts["extractor_args"] = {"youtube": {"player_client": clients}}
+                    last_progress_write = [0.0]
                     def download_progress(status):
+                        now = time.monotonic()
                         if status.get("status") == "downloading":
                             total = status.get("total_bytes") or status.get("total_bytes_estimate")
                             current = status.get("downloaded_bytes", 0)
-                            if total:
+                            if total and (now - last_progress_write[0] >= 1.0):
+                                last_progress_write[0] = now
                                 update_job(job_id, progress=min(25, 3 + int(22 * current / total)))
                         elif status.get("status") == "finished":
                             update_job(job_id, progress=25)
