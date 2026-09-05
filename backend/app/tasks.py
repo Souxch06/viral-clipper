@@ -85,20 +85,25 @@ def render_clip(downloaded_file: str, start: float, end: float, out_path: str):
     This uses ffmpeg to scale height to 1920 then center-crop width 1080.
     """
     try:
-        # Use ffmpeg to trim and re-encode with vertical crop
-        cmd = [
-            'ffmpeg', '-y',
-            '-ss', str(start),
-            '-to', str(end),
-            '-i', downloaded_file,
-            # 720x1280 is much faster on Render's shared CPU while remaining
-            # suitable for Shorts/Reels/TikTok. The source is never upscaled
-            # before the crop when a smaller input is available.
-            '-vf', "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(in_w-720)/2:(in_h-1280)/2",
-            '-c:v', 'libx264', '-crf', '27', '-preset', 'ultrafast', '-threads', '0',
-            '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart',
-            out_path
-        ]
+        # If the source is already vertical, avoid a second video encode. A
+        # stream copy is several times faster and preserves the original image.
+        probe = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', downloaded_file],
+            capture_output=True, text=True, check=False,
+        )
+        dimensions = probe.stdout.strip().split('x')
+        is_vertical = len(dimensions) == 2 and int(dimensions[0]) / max(1, int(dimensions[1])) < 0.70
+        if is_vertical:
+            cmd = ['ffmpeg', '-y', '-ss', str(start), '-i', downloaded_file,
+                   '-t', str(max(1, end - start)), '-map', '0:v:0', '-map', '0:a?',
+                   '-c', 'copy', '-avoid_negative_ts', 'make_zero', out_path]
+        else:
+            # 720x1280 is a good speed/quality compromise on Render's shared CPU.
+            cmd = ['ffmpeg', '-y', '-ss', str(start), '-to', str(end), '-i', downloaded_file,
+                   '-vf', "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(in_w-720)/2:(in_h-1280)/2",
+                   '-c:v', 'libx264', '-crf', '27', '-preset', 'ultrafast', '-threads', '0',
+                   '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', out_path]
         subprocess.run(cmd, check=True)
         return True
     except Exception as e:
@@ -122,7 +127,7 @@ def download_and_transcribe_task(self, job_id: int):
                 # is frequently challenged as a bot from cloud IP ranges.
                 # Avoid downloading 1080p+ sources on Render unless no smaller
                 # representation is available; this greatly reduces wait time.
-                "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
+                "format": "best[height<=480][ext=mp4]/best[height<=480]/best[height<=720]/best",
                 "outtmpl": video_out,
                 "noplaylist": True,
                 "quiet": True,
