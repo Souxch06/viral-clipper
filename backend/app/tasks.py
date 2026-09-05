@@ -1,4 +1,5 @@
 import os
+import re
 from celery import Celery
 from sqlmodel import Session
 from app.database import engine
@@ -147,7 +148,7 @@ def download_and_transcribe_task(self, job_id: int):
                     # useful when Android cannot export a cookies.txt file.
                     header = cookie_header.removeprefix("Cookie:").strip()
                     lines = ["# Netscape HTTP Cookie File"]
-                    for item in header.split(";"):
+                    for item in re.split(r"[;\\r\\n]+", header):
                         if "=" in item:
                             name, value = item.strip().split("=", 1)
                             lines.append(f".youtube.com\\tTRUE\\t/\\tTRUE\\t0\\t{name}\\t{value}")
