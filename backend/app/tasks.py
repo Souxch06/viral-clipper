@@ -193,6 +193,8 @@ def download_and_transcribe_task(self, job_id: int):
             # IPs are sometimes challenged. Retry compatible clients before
             # failing the job; cookies, when configured, are applied to each try.
             client_profiles = [
+                ["android_vr"],
+                ["web_embedded"],
                 ["android", "web_safari"],
                 ["tv", "web_safari"],
                 ["mweb", "web_safari"],
