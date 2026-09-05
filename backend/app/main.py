@@ -31,10 +31,25 @@ if os.path.exists(STORAGE_PATH):
 def on_startup():
     init_db()
 
+def studio_file():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "termux_ui.html"))
+
 @app.get("/", response_class=FileResponse)
 def studio():
-    """Serve the same studio when Render is opened directly or in the iframe."""
-    return FileResponse(os.path.join(os.path.dirname(__file__), "termux_ui.html"))
+    """Main landing page: the URL YouTube workflow."""
+    return studio_file()
+
+@app.get("/url", response_class=FileResponse)
+def url_page():
+    return studio_file()
+
+@app.get("/fichier", response_class=FileResponse)
+def file_page():
+    return studio_file()
+
+@app.get("/reglages", response_class=FileResponse)
+def settings_page():
+    return studio_file()
 
 @app.post("/api/jobs/analyze", response_model=dict)
 def create_job(payload: CreateJob, background_tasks: BackgroundTasks):
