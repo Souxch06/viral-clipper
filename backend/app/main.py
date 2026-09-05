@@ -71,10 +71,25 @@ def job_status(job_id: int):
         job = session.get(Job, job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
+        step_progress = {
+            "queued": 2,
+            "downloading": 15,
+            "extract_audio": 30,
+            "transcribing": 50,
+            "segmenting": 65,
+            "scoring": 72,
+            "rendering": 85,
+            "finished": 100,
+        }
+        current_step = job.step or "queued"
+        progress = 0 if job.status == "error" else step_progress.get(current_step, 5)
+        if job.status == "done":
+            progress = 100
         return {
             "id": job.id,
             "status": job.status,
             "step": job.step,
+            "progress": progress,
             "storage_path": job.storage_path,
             "metadata": job.get_metadata()
         }
