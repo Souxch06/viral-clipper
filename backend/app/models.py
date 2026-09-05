@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, Text
 from typing import Optional
 from datetime import datetime
 import json
@@ -11,12 +12,19 @@ class Job(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     storage_path: Optional[str] = None
-    metadata: Optional[str] = None  # JSON string: paths, transcript, clips, etc.
+    progress: int = Field(default=0, ge=0, le=100)
+    # ``metadata`` is reserved by SQLAlchemy's Declarative API. Keep the
+    # existing database column name for compatibility, but use a safe Python
+    # attribute name on the model.
+    metadata_json: Optional[str] = Field(
+        default=None,
+        sa_column=Column("metadata", Text, nullable=True),
+    )
 
     def set_metadata(self, obj: dict):
-        self.metadata = json.dumps(obj)
+        self.metadata_json = json.dumps(obj)
 
     def get_metadata(self):
-        if self.metadata:
-            return json.loads(self.metadata)
+        if self.metadata_json:
+            return json.loads(self.metadata_json)
         return {}

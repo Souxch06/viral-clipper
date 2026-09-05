@@ -11,17 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install the full Render backend dependencies, including OpenClip and Whisper.
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-# copy app
+# copy app, OpenClip modules and prompt templates
 COPY app /app/app
+COPY openclip_core /app/openclip_core
+COPY prompts /app/prompts
 
 # create storage dir
 RUN mkdir -p /storage /data
 
-# expose uvicorn port
-EXPOSE 8000
-
-# default entry: run uvicorn (overridden in docker-compose for worker)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Render provides PORT at runtime.
+EXPOSE 10000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
