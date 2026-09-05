@@ -56,7 +56,9 @@ def create_job(payload: CreateJob, background_tasks: BackgroundTasks):
 
         # Termux n'a généralement ni Redis ni worker séparé : exécuter la tâche
         # dans le processus FastAPI évite une infrastructure serveur obligatoire.
-        if os.getenv("TERMUX_MODE", "0") == "1":
+        # Render runs a single web process in the free setup; use FastAPI background
+        # tasks by default instead of requiring a separate Redis/Celery worker.
+        if os.getenv("TERMUX_MODE", "1") == "1":
             background_tasks.add_task(download_and_transcribe_task.run, job.id)
         else:
             download_and_transcribe_task.delay(job.id)
