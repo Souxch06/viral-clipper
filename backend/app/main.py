@@ -82,14 +82,20 @@ def job_status(job_id: int):
             "finished": 100,
         }
         current_step = job.step or "queued"
-        progress = 0 if job.status == "error" else step_progress.get(current_step, 5)
+        progress = 0 if job.status == "error" else (job.progress or step_progress.get(current_step, 5))
         if job.status == "done":
             progress = 100
+        elapsed = max(0, (datetime.utcnow() - job.created_at).total_seconds())
+        eta = None
+        if 0 < progress < 100:
+            eta = int(max(1, elapsed * (100 - progress) / progress))
         return {
             "id": job.id,
             "status": job.status,
             "step": job.step,
             "progress": progress,
+            "elapsed_seconds": int(elapsed),
+            "eta_seconds": eta,
             "storage_path": job.storage_path,
             "metadata": job.get_metadata()
         }

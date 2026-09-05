@@ -101,7 +101,7 @@ def render_clip(downloaded_file: str, start: float, end: float, out_path: str):
 @celery_app.task(bind=True, name="download_and_transcribe")
 def download_and_transcribe_task(self, job_id: int):
     try:
-        update_job(job_id, status="processing", step="downloading")
+        update_job(job_id, status="processing", step="downloading", progress=3)
         with Session(engine) as session:
             job = session.get(Job, job_id)
             if not job:
@@ -146,6 +146,15 @@ def download_and_transcribe_task(self, job_id: int):
                 try:
                     attempt_opts = dict(ydl_opts)
                     attempt_opts["extractor_args"] = {"youtube": {"player_client": clients}}
+                    def download_progress(status):
+                        if status.get("status") == "downloading":
+                            total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                            current = status.get("downloaded_bytes", 0)
+                            if total:
+                                update_job(job_id, progress=min(25, 3 + int(22 * current / total)))
+                        elif status.get("status") == "finished":
+                            update_job(job_id, progress=25)
+                    attempt_opts["progress_hooks"] = [download_progress]
                     with yt_dlp.YoutubeDL(attempt_opts) as ydl:
                         info = ydl.extract_info(job.original_url, download=True)
                         downloaded_file = ydl.prepare_filename(info)
@@ -167,7 +176,7 @@ def download_and_transcribe_task(self, job_id: int):
                     f"Détail: {str(last_download_error)[:240]}"
                 )
 
-            update_job(job_id, step="extract_audio", storage_path=project_dir)
+            update_job(job_id, step="extract_audio", progress=30, storage_path=project_dir)
 
             # extract audio (wav 16k mono)
             audio_path = os.path.join(project_dir, "audio.wav")
@@ -179,7 +188,7 @@ def download_and_transcribe_task(self, job_id: int):
             ]
             subprocess.run(cmd, check=True)
 
-            update_job(job_id, step="transcribing")
+            update_job(job_id, step="transcribing", progress=40)
 
             # transcribe with faster-whisper
             try:
@@ -210,17 +219,19 @@ def download_and_transcribe_task(self, job_id: int):
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     json.dump({"segments": []}, f)
 
-            update_job(job_id, step="segmenting")
+            update_job(job_id, step="segmenting", progress=65)
             # generate candidate segments
             candidates = generate_segments_from_transcript(transcript_path, duration)
 
-            update_job(job_id, step="scoring")
+            update_job(job_id, step="scoring", progress=72)
             # for MVP we use the candidate score as-is
             selected = candidates[:4]
 
-            update_job(job_id, step="rendering")
+            update_job(job_id, step="rendering", progress=75)
             clips_meta = []
+            total_selected = max(1, len(selected))
             for idx, seg in enumerate(selected):
+                update_job(job_id, progress=75 + int(20 * idx / total_selected))
                 out_mp4 = os.path.join(project_dir, f"clip_{idx+1:02d}.mp4")
                 ok = render_clip(downloaded_file, seg['start'], seg['end'], out_mp4)
                 if ok:
@@ -255,6 +266,7 @@ def download_and_transcribe_task(self, job_id: int):
                 job2 = session2.get(Job, job_id)
                 job2.status = "done"
                 job2.step = "finished"
+                job2.progress = 100
                 job2.storage_path = project_dir
                 job2.set_metadata(meta)
                 session2.add(job2)

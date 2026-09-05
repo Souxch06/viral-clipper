@@ -19,6 +19,13 @@ engine = create_engine(
 
 def init_db():
     SQLModel.metadata.create_all(engine)
+    # Keep existing SQLite databases usable after adding progress tracking.
+    if DATABASE_URL.startswith("sqlite"):
+        from sqlalchemy import text
+        with engine.begin() as connection:
+            columns = {row[1] for row in connection.execute(text("PRAGMA table_info(job)"))}
+            if "progress" not in columns:
+                connection.execute(text("ALTER TABLE job ADD COLUMN progress INTEGER DEFAULT 0"))
 
 def get_session():
     with Session(engine) as session:

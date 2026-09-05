@@ -12,6 +12,7 @@ class Job(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     storage_path: Optional[str] = None
+    progress: int = Field(default=0, ge=0, le=100)
     # ``metadata`` is reserved by SQLAlchemy's Declarative API. Keep the
     # existing database column name for compatibility, but use a safe Python
     # attribute name on the model.
