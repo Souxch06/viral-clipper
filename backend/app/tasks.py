@@ -91,9 +91,12 @@ def render_clip(downloaded_file: str, start: float, end: float, out_path: str):
             '-ss', str(start),
             '-to', str(end),
             '-i', downloaded_file,
-            '-vf', "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2",
-            '-c:v', 'libx264', '-crf', '23', '-preset', 'faster', '-threads', '0',
-            '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart',
+            # 720x1280 is much faster on Render's shared CPU while remaining
+            # suitable for Shorts/Reels/TikTok. The source is never upscaled
+            # before the crop when a smaller input is available.
+            '-vf', "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(in_w-720)/2:(in_h-1280)/2",
+            '-c:v', 'libx264', '-crf', '27', '-preset', 'ultrafast', '-threads', '0',
+            '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart',
             out_path
         ]
         subprocess.run(cmd, check=True)
