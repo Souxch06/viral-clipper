@@ -1,0 +1,10 @@
+yt-dlp
+fastapi<0.100
+pydantic<2
+uvicorn
+python-multipart
+anyio<4
+# Dependencies used by the FastAPI/SQLModel Render entrypoint.
+sqlmodel
+sqlalchemy
+celery
